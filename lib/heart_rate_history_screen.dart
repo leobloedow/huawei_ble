@@ -120,8 +120,14 @@ class _HeartRateHistoryScreenState extends State<HeartRateHistoryScreen> {
 
   void _exportToCSV(List<HeartRateRecord> records) async {
     try {
-      final csvData = await DataExportHelper.exportToCSV(records);
-      _showExportResult('CSV Export', csvData, 'heart_rate_data.csv');
+      final filePath = await DataExportHelper.exportToCSVFile(records);
+      if (filePath != null) {
+        _showExportSuccess('CSV Export', filePath);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('CSV export failed: Permission denied or storage error')),
+        );
+      }
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('CSV export failed: $e')),
@@ -131,8 +137,14 @@ class _HeartRateHistoryScreenState extends State<HeartRateHistoryScreen> {
 
   void _exportToJSON(List<HeartRateRecord> records) async {
     try {
-      final jsonData = await DataExportHelper.exportToJSON(records);
-      _showExportResult('JSON Export', jsonData, 'heart_rate_data.json');
+      final filePath = await DataExportHelper.exportToJSONFile(records);
+      if (filePath != null) {
+        _showExportSuccess('JSON Export', filePath);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('JSON export failed: Permission denied or storage error')),
+        );
+      }
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('JSON export failed: $e')),
@@ -142,8 +154,14 @@ class _HeartRateHistoryScreenState extends State<HeartRateHistoryScreen> {
 
   void _exportToTXT(List<HeartRateRecord> records) async {
     try {
-      final txtData = await DataExportHelper.exportToTXT(records);
-      _showExportResult('Text Export', txtData, 'heart_rate_data.txt');
+      final filePath = await DataExportHelper.exportToTXTFile(records);
+      if (filePath != null) {
+        _showExportSuccess('Text Export', filePath);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Text export failed: Permission denied or storage error')),
+        );
+      }
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Text export failed: $e')),
@@ -151,38 +169,35 @@ class _HeartRateHistoryScreenState extends State<HeartRateHistoryScreen> {
     }
   }
 
-  void _showExportResult(String title, String data, String filename) {
+  void _showExportSuccess(String title, String filePath) {
+    final filename = filePath.split('/').last;
+    
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text(title),
+        title: Text('$title Successful'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            const Icon(Icons.check_circle, color: Colors.green, size: 48),
+            const SizedBox(height: 16),
+            Text('File saved successfully!'),
+            const SizedBox(height: 8),
             Text('Filename: $filename'),
             const SizedBox(height: 8),
-            const Text('Data preview (first 200 characters):'),
-            const SizedBox(height: 8),
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: Colors.grey[100],
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: Text(
-                data.length > 200 ? '${data.substring(0, 200)}...' : data,
-                style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
-              ),
+            Text('Saved to app documents folder'),
+            const SizedBox(height: 16),
+            const Text(
+              'You can access this file through your device\'s file manager in the app\'s documents folder.',
+              style: TextStyle(fontSize: 12, color: Colors.grey),
             ),
-            const SizedBox(height: 8),
-            Text('Total characters: ${data.length}'),
           ],
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Close'),
+            child: const Text('OK'),
           ),
         ],
       ),

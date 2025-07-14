@@ -4,6 +4,9 @@ import 'dart:async';
 import 'package:flutter_background/flutter_background.dart';
 import 'database_helper.dart';
 import 'heart_rate_history_screen.dart';
+import 'heart_rate_graph_screen.dart';
+import 'settings_screen.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -41,7 +44,7 @@ class BleScannerScreen extends StatefulWidget {
   State<BleScannerScreen> createState() => _BleScannerScreenState();
 }
 
-class _BleScannerScreenState extends State<BleScannerScreen> {
+class _BleScannerScreenState extends State<BleScannerScreen> with WidgetsBindingObserver {
   final FlutterReactiveBle _ble = FlutterReactiveBle();
   final DatabaseHelper _databaseHelper = DatabaseHelper();
   StreamSubscription<DiscoveredDevice>? _scanStream;
@@ -55,63 +58,97 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
 
   int? _bpm;
   int _totalRecords = 0;
+  String? _savedDeviceId;
+  String? _savedDeviceName;
 
   void _startScan() async {
-    final hasPermissions = await FlutterBackground.hasPermissions;
-    if (!hasPermissions) {
+    try {
+      final hasPermissions = await FlutterBackground.hasPermissions;
+      if (!hasPermissions) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Background permissions required')),
+          );
+        }
+        return;
+      }
+
+      await FlutterBackground.enableBackgroundExecution();
+
+      // Cancel any existing scan
+      await _scanStream?.cancel();
+
+      setState(() {
+        _isScanning = true;
+        _devices.clear();
+      });
+
+      _scanStream = _ble
+          .scanForDevices(withServices: [])
+          .listen(
+            (device) {
+              // Debug: Print all discovered devices
+              print('Discovered device: ${device.name} (${device.id})');
+              
+              // Check for Huawei Band 10 broadcasting
+              if ((device.name.toUpperCase().contains("HUAWEI") || 
+                   device.name.toUpperCase().contains("BAND") ||
+                   device.name.toUpperCase().contains("HR-27E")) &&
+                  !_devices.any((d) => d.id == device.id)) {
+                
+                setState(() {
+                  _devices.add(device);
+                });
+                
+                // Auto-connect to saved device or first discovered device
+                if (_savedDeviceId == null) {
+                  // No saved device, connect to first one and save it
+                  _connectAndListenToHeartRate(device);
+                  _saveDevice(device.id, device.name);
+                } else if (device.id == _savedDeviceId) {
+                  // Found saved device, connect to it
+                  _connectAndListenToHeartRate(device);
+                }
+              }
+            },
+            onError: (error) {
+              print('Scan error: $error');
+              setState(() {
+                _isScanning = false;
+              });
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Scan error: $error')),
+                );
+              }
+              // Retry scan after error
+              Future.delayed(const Duration(seconds: 5), () {
+                if (_isAutoScanning && !_isScanning) {
+                  _startScan();
+                }
+              });
+            },
+            onDone: () {
+              print('Scan completed');
+              setState(() {
+                _isScanning = false;
+              });
+            },
+          );
+
+      // For broadcasting, we need continuous scanning
+      // Don't stop after 2 seconds
+    } catch (e) {
+      print('Error starting scan: $e');
+      setState(() {
+        _isScanning = false;
+      });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Background permissions required')),
+          SnackBar(content: Text('Failed to start scan: $e')),
         );
       }
-      return;
     }
-
-    await FlutterBackground.enableBackgroundExecution();
-
-    setState(() {
-      _isScanning = true;
-      _devices.clear();
-    });
-
-    _scanStream = _ble
-        .scanForDevices(withServices: [])
-        .listen(
-          (device) {
-            // Debug: Print all discovered devices
-            print('Discovered device: ${device.name} (${device.id})');
-            
-            // Check for Huawei Band 10 broadcasting
-            if ((device.name.toUpperCase().contains("HUAWEI") || 
-                 device.name.toUpperCase().contains("BAND") ||
-                 device.name.toUpperCase().contains("HR-27E")) &&
-                !_devices.any((d) => d.id == device.id)) {
-              
-              setState(() {
-                _devices.add(device);
-                _connectAndListenToHeartRate(device);
-              });
-            }
-          },
-          onError: (error) {
-            setState(() {
-              _isScanning = false;
-            });
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('Scan error: $error')),
-              );
-            }
-          },
-          onDone: () {
-            setState(() {
-              _isScanning = false;
-            });
-          },
-        );
-
-    // For broadcasting, we need continuous scanning
-    // Don't stop after 2 seconds
   }
 
   void _startAutoScan() {
@@ -123,6 +160,7 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
     _startScan();
     
     // Set up periodic scanning every 30 seconds
+    _autoScanTimer?.cancel();
     _autoScanTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
       if (_isAutoScanning && !_isScanning) {
         _startScan();
@@ -140,6 +178,7 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
 
   void _stopScan() {
     _scanStream?.cancel();
+    _scanStream = null;
     setState(() {
       _isScanning = false;
     });
@@ -156,10 +195,38 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
     });
   }
 
+  void _clearSavedDevice() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('saved_device_id');
+    await prefs.remove('saved_device_name');
+    setState(() {
+      _savedDeviceId = null;
+      _savedDeviceName = null;
+    });
+  }
+
   Future<void> _loadTotalRecords() async {
     final records = await _databaseHelper.getAllHeartRateRecords();
     setState(() {
       _totalRecords = records.length;
+    });
+  }
+
+  Future<void> _loadSavedDevice() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _savedDeviceId = prefs.getString('saved_device_id');
+      _savedDeviceName = prefs.getString('saved_device_name');
+    });
+  }
+
+  Future<void> _saveDevice(String deviceId, String deviceName) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('saved_device_id', deviceId);
+    await prefs.setString('saved_device_name', deviceName);
+    setState(() {
+      _savedDeviceId = deviceId;
+      _savedDeviceName = deviceName;
     });
   }
 
@@ -240,11 +307,39 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _loadTotalRecords();
+    _loadSavedDevice();
+    // Start auto-scanning when app initializes
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _startAutoScan();
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    
+    switch (state) {
+      case AppLifecycleState.resumed:
+        // App came back to foreground
+        if (_isAutoScanning && !_isScanning) {
+          _startScan();
+        }
+        break;
+      case AppLifecycleState.paused:
+      case AppLifecycleState.detached:
+        // App went to background
+        _stopScan();
+        break;
+      default:
+        break;
+    }
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _scanStream?.cancel();
     _connectionSubscription?.cancel();
     _heartRateSubscription?.cancel();
@@ -260,15 +355,28 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
         title: const Text('Huawei BLE Monitor'),
         actions: [
           IconButton(
-            icon: const Icon(Icons.history),
+            icon: const Icon(Icons.show_chart),
             onPressed: () {
               Navigator.push(
                 context,
                 MaterialPageRoute(
-                  builder: (context) => const HeartRateHistoryScreen(),
+                  builder: (context) => const HeartRateGraphScreen(),
                 ),
               );
             },
+            tooltip: 'Heart Rate Graph',
+          ),
+          IconButton(
+            icon: const Icon(Icons.settings),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const SettingsScreen(),
+                ),
+              );
+            },
+            tooltip: 'Settings',
           ),
         ],
       ),
@@ -404,16 +512,37 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
                     itemCount: _devices.length,
                     itemBuilder: (context, index) {
                       final device = _devices[index];
+                      final isSavedDevice = device.id == _savedDeviceId;
                       return Card(
                         margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
                         child: ListTile(
-                          leading: const Icon(Icons.watch, color: Colors.blue),
+                          leading: Icon(
+                            Icons.watch, 
+                            color: isSavedDevice ? Colors.green : Colors.blue,
+                          ),
                           title: Text(
                             device.name.isNotEmpty ? device.name : 'Unknown Device',
                             style: const TextStyle(fontWeight: FontWeight.bold),
                           ),
-                          subtitle: Text(device.id),
-                          trailing: const Icon(Icons.bluetooth_connected, color: Colors.green),
+                          subtitle: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(device.id),
+                              if (isSavedDevice)
+                                const Text(
+                                  'Saved Device',
+                                  style: TextStyle(
+                                    color: Colors.green,
+                                    fontWeight: FontWeight.w500,
+                                    fontSize: 12,
+                                  ),
+                                ),
+                            ],
+                          ),
+                          trailing: Icon(
+                            isSavedDevice ? Icons.favorite : Icons.bluetooth_connected,
+                            color: isSavedDevice ? Colors.green : Colors.blue,
+                          ),
                         ),
                       );
                     },
@@ -455,4 +584,6 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
     if (bpm < 120) return Colors.orange;
     return Colors.red;
   }
+
+
 }

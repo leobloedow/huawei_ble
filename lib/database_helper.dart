@@ -101,6 +101,13 @@ class DatabaseHelper {
     return List.generate(maps.length, (i) => HeartRateRecord.fromMap(maps[i]));
   }
 
+  Stream<List<HeartRateRecord>> getHeartRateRecordsStream() async* {
+    while (true) {
+      yield await getAllHeartRateRecords();
+      await Future.delayed(const Duration(milliseconds: 500));
+    }
+  }
+
   Future<void> deleteAllRecords() async {
     final db = await database;
     await db.delete('heart_rate_records');
@@ -111,5 +118,9 @@ class DatabaseHelper {
     // This could be extended to export to CSV or other formats
     // For now, we'll just return the data for external processing
     return records;
+  }
+
+  Future<void> clearAllData() async {
+    await deleteAllRecords();
   }
 } 
