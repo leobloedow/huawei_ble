@@ -59,9 +59,11 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
   void _startScan() async {
     final hasPermissions = await FlutterBackground.hasPermissions;
     if (!hasPermissions) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Background permissions required')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Background permissions required')),
+        );
+      }
       return;
     }
 
@@ -76,8 +78,15 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
         .scanForDevices(withServices: [])
         .listen(
           (device) {
-            if (device.name.startsWith("HUAWEI") &&
+            // Debug: Print all discovered devices
+            print('Discovered device: ${device.name} (${device.id})');
+            
+            // Check for Huawei Band 10 broadcasting
+            if ((device.name.toUpperCase().contains("HUAWEI") || 
+                 device.name.toUpperCase().contains("BAND") ||
+                 device.name.toUpperCase().contains("HR-27E")) &&
                 !_devices.any((d) => d.id == device.id)) {
+              
               setState(() {
                 _devices.add(device);
                 _connectAndListenToHeartRate(device);
@@ -88,9 +97,11 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
             setState(() {
               _isScanning = false;
             });
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Scan error: $error')),
-            );
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('Scan error: $error')),
+              );
+            }
           },
           onDone: () {
             setState(() {
@@ -99,9 +110,8 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
           },
         );
 
-    Future.delayed(const Duration(seconds: 2), () {
-      _stopScan();
-    });
+    // For broadcasting, we need continuous scanning
+    // Don't stop after 2 seconds
   }
 
   void _startAutoScan() {
@@ -142,6 +152,7 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
     _stopAutoScan();
     setState(() {
       _bpm = null;
+      _devices.clear();
     });
   }
 
@@ -153,54 +164,75 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
   }
 
   Future<void> _connectAndListenToHeartRate(DiscoveredDevice device) async {
+    print('Connecting to device: ${device.name}');
+    
     _connectionSubscription = _ble
         .connectToDevice(id: device.id)
         .listen(
           (connectionState) async {
+            print('Connection state: ${connectionState.connectionState}');
             if (connectionState.connectionState ==
                 DeviceConnectionState.connected) {
-              final heartRateService = QualifiedCharacteristic(
-                serviceId: Uuid.parse("0000180D-0000-1000-8000-00805f9b34fb"),
-                characteristicId: Uuid.parse(
-                  "00002A37-0000-1000-8000-00805f9b34fb",
-                ),
+              print('Connected! Discovering services...');
+              
+              await _ble.discoverAllServices(device.id);
+              final services = await _ble.getDiscoveredServices(device.id);
+
+              final heartRateService = services.firstWhere(
+                (service) =>
+                    service.id ==
+                    Uuid.parse("0000180D-0000-1000-8000-00805f9b34fb"),
+                orElse: () => throw Exception('Heart Rate Service not found'),
+              );
+
+              final heartRateChar = heartRateService.characteristics.firstWhere(
+                (c) =>
+                    c.id == Uuid.parse("00002A37-0000-1000-8000-00805f9b34fb"),
+                orElse:
+                    () =>
+                        throw Exception('Heart Rate characteristic not found'),
+              );
+
+              final qualifiedChar = QualifiedCharacteristic(
+                characteristicId: heartRateChar.id,
+                serviceId: heartRateService.id,
                 deviceId: device.id,
               );
 
               _heartRateSubscription = _ble
-                  .subscribeToCharacteristic(heartRateService)
-                  .listen(
-                    (data) async {
-                      if (data.isNotEmpty && data.length > 1) {
-                        final bpm = data[1];
-                        setState(() {
-                          _bpm = bpm;
-                        });
-                        
-                        // Save heart rate data to database
-                        final record = HeartRateRecord(
-                          bpm: bpm,
-                          timestamp: DateTime.now(),
-                        );
-                        await _databaseHelper.insertHeartRate(record);
-                        await _loadTotalRecords();
-                      }
-                    },
-                    onError: (dynamic error) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text('Subscription error: $error')),
+                  .subscribeToCharacteristic(qualifiedChar)
+                  .listen((data) async {
+                    print('Heart rate data received: $data');
+                    if (data.isNotEmpty && data.length > 1) {
+                      final bpm = data[1];
+                      print('Extracted BPM: $bpm');
+                      
+                      setState(() {
+                        _bpm = bpm;
+                      });
+                      
+                      // Save heart rate data to database
+                      final record = HeartRateRecord(
+                        bpm: bpm,
+                        timestamp: DateTime.now(),
                       );
-                    },
-                  );
+                      await _databaseHelper.insertHeartRate(record);
+                      await _loadTotalRecords();
+                    }
+                  });
             } else if (connectionState.connectionState ==
                 DeviceConnectionState.disconnected) {
+              print('Device disconnected');
               _disconnect();
             }
           },
           onError: (e) {
-            ScaffoldMessenger.of(
-              context,
-            ).showSnackBar(SnackBar(content: Text('Connection error: $e')));
+            print('Connection error: $e');
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('Connection error: $e')),
+              );
+            }
           },
         );
   }
@@ -324,6 +356,8 @@ class _BleScannerScreenState extends State<BleScannerScreen> {
               ],
             ),
           ),
+          
+
           
           const SizedBox(height: 8),
           
