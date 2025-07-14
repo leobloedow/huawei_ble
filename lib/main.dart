@@ -7,10 +7,39 @@ import 'heart_rate_history_screen.dart';
 import 'heart_rate_graph_screen.dart';
 import 'settings_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await initBackgroundService();
+  // Initialize flutter_background before anything else
+  await FlutterBackground.initialize(
+    androidConfig: const FlutterBackgroundAndroidConfig(
+      notificationTitle: "Huawei BLE",
+      notificationText: "Receiving heart rate data in the background.",
+      notificationIcon: AndroidResource(name: 'ic_launcher', defType: 'mipmap'),
+    ),
+  );
+  FlutterForegroundTask.init(
+    androidNotificationOptions: AndroidNotificationOptions(
+      channelId: 'ble_channel_id',
+      channelName: 'BLE Background Service',
+      channelDescription: 'Collecting heart rate data in the background',
+      channelImportance: NotificationChannelImportance.LOW,
+      priority: NotificationPriority.LOW,
+      // iconData and related fields removed, as they are not part of the API
+      // See: https://pub.dev/packages/flutter_foreground_task/example
+    ),
+    iosNotificationOptions: const IOSNotificationOptions(
+      showNotification: false,
+      playSound: false,
+    ),
+    foregroundTaskOptions: const ForegroundTaskOptions(
+      autoRunOnBoot: true,
+      allowWakeLock: true,
+      allowWifiLock: true,
+      // eventAction removed, not available in 6.1.2
+    ),
+  );
   runApp(const MyApp());
 }
 
