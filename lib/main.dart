@@ -8,6 +8,8 @@ import 'heart_rate_graph_screen.dart';
 import 'settings_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+import 'package:http/http.dart' as http;
+import 'secrets.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -19,6 +21,7 @@ void main() async {
       notificationIcon: AndroidResource(name: 'ic_launcher', defType: 'mipmap'),
     ),
   );
+  print('FlutterBackground initialized!');
   FlutterForegroundTask.init(
     androidNotificationOptions: AndroidNotificationOptions(
       channelId: 'ble_channel_id',
@@ -50,6 +53,35 @@ Future<void> initBackgroundService() async {
     notificationIcon: AndroidResource(name: 'ic_launcher', defType: 'mipmap'),
   );
   await FlutterBackground.initialize(androidConfig: androidConfig);
+}
+
+Future<void> sendHeartRateToInfluxDB(int bpm, DateTime timestamp) async {
+  final prefs = await SharedPreferences.getInstance();
+  final deviceId = prefs.getString('device_id') ?? 'unknown';
+
+  final url = Uri.parse(
+    'https://us-east-1-1.aws.cloud2.influxdata.com/api/v2/write?org=1d24e5b2e6a0fe3b&bucket=heartrate&precision=s'
+  );
+  final token = influxDbToken;
+
+  // Use the deviceId as the tag
+  final data = 'heartrate,device=$deviceId bpm=$bpm ${timestamp.toUtc().millisecondsSinceEpoch ~/ 1000}';
+
+  final response = await http.post(
+    url,
+    headers: {
+      'Authorization': 'Token $token',
+      'Content-Type': 'text/plain',
+      'Accept': 'application/json',
+    },
+    body: data,
+  );
+
+  if (response.statusCode == 204) {
+    print('Data sent successfully');
+  } else {
+    print('Failed to send data: ${response.statusCode} ${response.body}');
+  }
 }
 
 class MyApp extends StatelessWidget {
@@ -314,6 +346,8 @@ class _BleScannerScreenState extends State<BleScannerScreen> with WidgetsBinding
                       );
                       await _databaseHelper.insertHeartRate(record);
                       await _loadTotalRecords();
+                      // Send to InfluxDB
+                      await sendHeartRateToInfluxDB(bpm, record.timestamp);
                     }
                   });
             } else if (connectionState.connectionState ==

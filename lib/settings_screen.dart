@@ -15,6 +15,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String? _savedDeviceId;
   String? _savedDeviceName;
   int _totalRecords = 0;
+  final TextEditingController _deviceIdController = TextEditingController();
 
   @override
   void initState() {
@@ -28,6 +29,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() {
       _savedDeviceId = prefs.getString('saved_device_id');
       _savedDeviceName = prefs.getString('saved_device_name');
+      _deviceIdController.text = prefs.getString('device_id') ?? '';
     });
   }
 
@@ -45,6 +47,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() {
       _savedDeviceId = deviceId;
       _savedDeviceName = deviceName;
+    });
+  }
+
+  Future<void> _saveDeviceId(String id) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('device_id', id);
+    setState(() {
+      _savedDeviceId = id;
     });
   }
 
@@ -127,6 +137,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
         children: [
           // Device Management Section
           _buildSectionHeader('Device Management'),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: TextField(
+              controller: _deviceIdController,
+              decoration: const InputDecoration(
+                labelText: 'Device ID',
+                hintText: 'Enter a unique ID for this device',
+                border: OutlineInputBorder(),
+              ),
+              onChanged: (value) => _saveDeviceId(value),
+            ),
+          ),
           _buildListTile(
             icon: Icons.bluetooth,
             title: 'Saved Device',
