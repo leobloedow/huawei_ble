@@ -20,23 +20,10 @@ class _HeartRateGraphScreenState extends State<HeartRateGraphScreen> {
   bool _autoRefresh = true;
   int? _currentBpm;
   bool _isUserInteracting = false;
-  
-  // Time span options
-  final List<TimeSpan> _timeSpans = [
-    TimeSpan('1 Hour', Duration(hours: 1)),
-    TimeSpan('4 Hours', Duration(hours: 4)),
-    TimeSpan('12 Hours', Duration(hours: 12)),
-    TimeSpan('24 Hours', Duration(days: 1)),
-    TimeSpan('3 Days', Duration(days: 3)),
-    TimeSpan('7 Days', Duration(days: 7)),
-    TimeSpan('30 Days', Duration(days: 30)),
-    TimeSpan('All Time', Duration.zero),
-  ];
-  
-  TimeSpan _selectedTimeSpan = TimeSpan('24 Hours', Duration(days: 1));
-  
 
-  
+  // Remove time span options, hardcode to 30 minutes
+  static const Duration _fixedTimeSpan = Duration(minutes: 30);
+
   // Statistics
   double _averageBpm = 0;
   int _minBpm = 0;
@@ -57,15 +44,10 @@ class _HeartRateGraphScreenState extends State<HeartRateGraphScreen> {
     });
 
     final now = DateTime.now();
-    final startTime = _selectedTimeSpan.duration == Duration.zero
-        ? DateTime(2020, 1, 1) // Very old date for "All Time"
-        : now.subtract(_selectedTimeSpan.duration);
-
+    final startTime = now.subtract(_fixedTimeSpan);
     final records = await _databaseHelper.getHeartRateRecordsForPeriod(startTime, now);
-    
-    // Sort by timestamp
     records.sort((a, b) => a.timestamp.compareTo(b.timestamp));
-    
+
     // Calculate statistics
     if (records.isNotEmpty) {
       final bpmValues = records.map((r) => r.bpm).toList();
@@ -112,9 +94,7 @@ class _HeartRateGraphScreenState extends State<HeartRateGraphScreen> {
     
     // Update data without showing loading state
     final now = DateTime.now();
-    final startTime = _selectedTimeSpan.duration == Duration.zero
-        ? DateTime(2020, 1, 1) // Very old date for "All Time"
-        : now.subtract(_selectedTimeSpan.duration);
+    final startTime = now.subtract(_fixedTimeSpan);
 
     final records = await _databaseHelper.getHeartRateRecordsForPeriod(startTime, now);
     
@@ -216,14 +196,21 @@ class _HeartRateGraphScreenState extends State<HeartRateGraphScreen> {
     
     final spots = <FlSpot>[];
     final startTime = _records.first.timestamp.millisecondsSinceEpoch.toDouble();
-    
-    for (int i = 0; i < _records.length; i++) {
+    final maxPoints = 200;
+    final step = (_records.length / maxPoints).ceil();
+    for (int i = 0; i < _records.length; i += step) {
       final record = _records[i];
       final x = (record.timestamp.millisecondsSinceEpoch - startTime) / (1000 * 60); // Minutes from start
       final y = record.bpm.toDouble();
       spots.add(FlSpot(x, y));
     }
-    
+    // Always include the last point for accuracy
+    if (_records.length > 0 && (spots.isEmpty || spots.last.x != (_records.last.timestamp.millisecondsSinceEpoch - startTime) / (1000 * 60))) {
+      final record = _records.last;
+      final x = (record.timestamp.millisecondsSinceEpoch - startTime) / (1000 * 60);
+      final y = record.bpm.toDouble();
+      spots.add(FlSpot(x, y));
+    }
     return spots;
   }
 
@@ -233,11 +220,7 @@ class _HeartRateGraphScreenState extends State<HeartRateGraphScreen> {
     final startTime = _records.first.timestamp;
     final time = startTime.add(Duration(minutes: value.round()));
     
-    if (_selectedTimeSpan.duration.inDays > 0) {
-      return DateFormat('MMM dd\nHH:mm').format(time);
-    } else {
-      return DateFormat('HH:mm').format(time);
-    }
+    return DateFormat('HH:mm').format(time);
   }
 
   @override
@@ -310,40 +293,11 @@ class _HeartRateGraphScreenState extends State<HeartRateGraphScreen> {
                     ),
                   ),
                 
-                // Time span selector
+                // Remove time span selector, just show stats
                 Container(
                   padding: const EdgeInsets.all(16),
                   child: Column(
                     children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text(
-                            'Time Span:',
-                            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                          ),
-                          DropdownButton<TimeSpan>(
-                            value: _selectedTimeSpan,
-                            onChanged: (TimeSpan? newValue) {
-                              if (newValue != null) {
-                                setState(() {
-                                  _selectedTimeSpan = newValue;
-                                });
-                                _updateCurrentBpmOnly();
-                                _updateDataSilently();
-                              }
-                            },
-                            items: _timeSpans.map((TimeSpan timeSpan) {
-                              return DropdownMenuItem<TimeSpan>(
-                                value: timeSpan,
-                                child: Text(timeSpan.label),
-                              );
-                            }).toList(),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      // Statistics row
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                         children: [
@@ -354,7 +308,6 @@ class _HeartRateGraphScreenState extends State<HeartRateGraphScreen> {
                         ],
                       ),
                       const SizedBox(height: 8),
-                      // Auto-refresh status
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                         decoration: BoxDecoration(
@@ -438,13 +391,13 @@ class _HeartRateGraphScreenState extends State<HeartRateGraphScreen> {
                             ),
                           )
                         : LineChart(
-                            key: ValueKey('chart_${_selectedTimeSpan.label}_${_records.length}'),
+                            key: ValueKey('chart_30min_${_records.length}'),
                             LineChartData(
                               gridData: FlGridData(
                                 show: true,
                                 drawVerticalLine: true,
                                 horizontalInterval: 20,
-                                verticalInterval: _selectedTimeSpan.duration.inHours > 24 ? 24 : 1,
+                                verticalInterval: 2,
                                 getDrawingHorizontalLine: (value) {
                                   return FlLine(
                                     color: Colors.grey.withOpacity(0.3),
@@ -470,16 +423,20 @@ class _HeartRateGraphScreenState extends State<HeartRateGraphScreen> {
                                   sideTitles: SideTitles(
                                     showTitles: true,
                                     reservedSize: 40,
-                                    interval: _selectedTimeSpan.duration.inHours > 24 ? 24 : 2,
+                                    interval: 2,
                                     getTitlesWidget: (double value, TitleMeta meta) {
                                       return SideTitleWidget(
                                         axisSide: meta.axisSide,
-                                        child: Text(
-                                          _formatXAxis(value),
-                                          style: const TextStyle(
-                                            color: Colors.grey,
-                                            fontWeight: FontWeight.bold,
-                                            fontSize: 10,
+                                        space: 8,
+                                        child: Transform.rotate(
+                                          angle: -0.5,
+                                          child: Text(
+                                            _formatXAxis(value),
+                                            style: const TextStyle(
+                                              color: Colors.grey,
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 10,
+                                            ),
                                           ),
                                         ),
                                       );
@@ -542,70 +499,66 @@ class _HeartRateGraphScreenState extends State<HeartRateGraphScreen> {
                                       begin: Alignment.topCenter,
                                       end: Alignment.bottomCenter,
                                       colors: [
-                                        Colors.red.withOpacity(0.1),
-                                        Colors.orange.withOpacity(0.1),
-                                        Colors.green.withOpacity(0.1),
+                                        Colors.red.withOpacity(0.15),
+                                        Colors.orange.withOpacity(0.12),
+                                        Colors.green.withOpacity(0.10),
                                       ],
+                                      stops: const [0.0, 0.5, 1.0],
                                     ),
                                   ),
                                 ),
                               ],
-                                                             lineTouchData: LineTouchData(
-                                 enabled: true,
-                                 touchCallback: (FlTouchEvent event, LineTouchResponse? touchResponse) {
-                                   if (event is FlPanDownEvent || event is FlTapDownEvent) {
-                                     setState(() {
-                                       _isUserInteracting = true;
-                                     });
-                                   } else if (event is FlPanEndEvent || event is FlTapUpEvent) {
-                                     // Delay resetting interaction state to allow tooltip to be read
-                                     Future.delayed(const Duration(milliseconds: 500), () {
-                                       if (mounted) {
-                                         setState(() {
-                                           _isUserInteracting = false;
-                                         });
-                                       }
-                                     });
-                                   }
-                                 },
-                                 touchTooltipData: LineTouchTooltipData(
-                                   tooltipBgColor: Colors.blueGrey.withOpacity(0.9),
-                                   getTooltipItems: (List<LineBarSpot> touchedBarSpots) {
-                                     return touchedBarSpots.map((barSpot) {
-                                       // Find the closest data point based on X position
-                                       final data = _getChartData();
-                                       if (data.isNotEmpty) {
-                                         // Find the index of the closest point
-                                         int closestIndex = 0;
-                                         double minDistance = double.infinity;
-                                         
-                                         for (int i = 0; i < data.length; i++) {
-                                           final distance = (data[i].x - barSpot.x).abs();
-                                           if (distance < minDistance) {
-                                             minDistance = distance;
-                                             closestIndex = i;
-                                           }
-                                         }
-                                         
-                                         if (closestIndex >= 0 && closestIndex < _records.length) {
-                                           final record = _records[closestIndex];
-                                           return LineTooltipItem(
-                                             '${record.bpm} BPM\n${DateFormat('MMM dd, HH:mm').format(record.timestamp)}',
-                                             const TextStyle(
-                                               color: Colors.white,
-                                               fontWeight: FontWeight.bold,
-                                             ),
-                                           );
-                                         }
-                                       }
-                                       return null;
-                                     }).where((item) => item != null).toList();
-                                   },
-                                 ),
-                                 handleBuiltInTouches: true,
-                               ),
-                                                         ),
-                           ),
+                              lineTouchData: LineTouchData(
+                                enabled: true,
+                                touchCallback: (FlTouchEvent event, LineTouchResponse? touchResponse) {
+                                  if (event is FlPanDownEvent || event is FlTapDownEvent) {
+                                    setState(() {
+                                      _isUserInteracting = true;
+                                    });
+                                  } else if (event is FlPanEndEvent || event is FlTapUpEvent) {
+                                    Future.delayed(const Duration(milliseconds: 500), () {
+                                      if (mounted) {
+                                        setState(() {
+                                          _isUserInteracting = false;
+                                        });
+                                      }
+                                    });
+                                  }
+                                },
+                                touchTooltipData: LineTouchTooltipData(
+                                  tooltipBgColor: Colors.blueGrey.withOpacity(0.9),
+                                  getTooltipItems: (List<LineBarSpot> touchedBarSpots) {
+                                    return touchedBarSpots.map((barSpot) {
+                                      final data = _getChartData();
+                                      if (data.isNotEmpty) {
+                                        int closestIndex = 0;
+                                        double minDistance = double.infinity;
+                                        for (int i = 0; i < data.length; i++) {
+                                          final distance = (data[i].x - barSpot.x).abs();
+                                          if (distance < minDistance) {
+                                            minDistance = distance;
+                                            closestIndex = i;
+                                          }
+                                        }
+                                        if (closestIndex >= 0 && closestIndex < _records.length) {
+                                          final record = _records[closestIndex];
+                                          return LineTooltipItem(
+                                            '${record.bpm} BPM\n${DateFormat('MMM dd, HH:mm').format(record.timestamp)}',
+                                            const TextStyle(
+                                              color: Colors.white,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          );
+                                        }
+                                      }
+                                      return null;
+                                    }).where((item) => item != null).toList();
+                                  },
+                                ),
+                                handleBuiltInTouches: true,
+                              ),
+                            ),
+                          ),
                   ),
                 ),
                 
@@ -664,7 +617,7 @@ class _HeartRateGraphScreenState extends State<HeartRateGraphScreen> {
                 const SizedBox(height: 16),
                 Text('Chart data exported successfully!'),
                 const SizedBox(height: 8),
-                Text('Time span: ${_selectedTimeSpan.label}'),
+                Text('Time span: ${_fixedTimeSpan.inMinutes} minutes'),
                 Text('Data points: $_totalPoints'),
                 Text('Filename: $filename'),
                 const SizedBox(height: 8),
@@ -702,22 +655,4 @@ class _HeartRateGraphScreenState extends State<HeartRateGraphScreen> {
     if (bpm < 120) return Colors.orange;
     return Colors.red;
   }
-}
-
-class TimeSpan {
-  final String label;
-  final Duration duration;
-
-  TimeSpan(this.label, this.duration);
-
-  @override
-  bool operator ==(Object other) {
-    if (identical(this, other)) return true;
-    return other is TimeSpan &&
-        other.label == label &&
-        other.duration == duration;
-  }
-
-  @override
-  int get hashCode => label.hashCode ^ duration.hashCode;
 } 

@@ -13,7 +13,6 @@ import 'secrets.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // Initialize flutter_background before anything else
   await FlutterBackground.initialize(
     androidConfig: const FlutterBackgroundAndroidConfig(
       notificationTitle: "Huawei BLE",
@@ -29,8 +28,6 @@ void main() async {
       channelDescription: 'Collecting heart rate data in the background',
       channelImportance: NotificationChannelImportance.LOW,
       priority: NotificationPriority.LOW,
-      // iconData and related fields removed, as they are not part of the API
-      // See: https://pub.dev/packages/flutter_foreground_task/example
     ),
     iosNotificationOptions: const IOSNotificationOptions(
       showNotification: false,
@@ -40,7 +37,6 @@ void main() async {
       autoRunOnBoot: true,
       allowWakeLock: true,
       allowWifiLock: true,
-      // eventAction removed, not available in 6.1.2
     ),
   );
   runApp(const MyApp());
@@ -113,6 +109,7 @@ class _BleScannerScreenState extends State<BleScannerScreen> with WidgetsBinding
   bool _isScanning = false;
   bool _isAutoScanning = false;
   Timer? _autoScanTimer;
+  Timer? _periodicRestartTimer;
 
   StreamSubscription<ConnectionStateUpdate>? _connectionSubscription;
   StreamSubscription<List<int>>? _heartRateSubscription;
@@ -367,6 +364,58 @@ class _BleScannerScreenState extends State<BleScannerScreen> with WidgetsBinding
         );
   }
 
+  // Add PIN dialog function
+  Future<void> _showPinDialogAndNavigate() async {
+    final TextEditingController _pinController = TextEditingController();
+    bool? success = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Enter PIN'),
+          content: TextField(
+            controller: _pinController,
+            keyboardType: TextInputType.number,
+            obscureText: true,
+            maxLength: 8,
+            decoration: const InputDecoration(
+              labelText: 'PIN',
+              counterText: '',
+            ),
+            autofocus: true,
+            onSubmitted: (_) {
+              Navigator.of(context).pop(_pinController.text == '2507');
+            },
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop(_pinController.text == '2507');
+              },
+              child: const Text('OK'),
+            ),
+          ],
+        );
+      },
+    );
+    if (success == true) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => const SettingsScreen(),
+        ),
+      );
+    } else if (success == false) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Incorrect PIN')),
+      );
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -376,6 +425,14 @@ class _BleScannerScreenState extends State<BleScannerScreen> with WidgetsBinding
     // Start auto-scanning when app initializes
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _startAutoScan();
+    });
+    // Periodically restart BLE scan/service every 30 minutes
+    _periodicRestartTimer = Timer.periodic(const Duration(minutes: 30), (timer) {
+      print('Timer.periodic: Restarting BLE scan/service');
+      if (_isAutoScanning) {
+        _stopScan();
+        _startScan();
+      }
     });
   }
 
@@ -407,6 +464,7 @@ class _BleScannerScreenState extends State<BleScannerScreen> with WidgetsBinding
     _connectionSubscription?.cancel();
     _heartRateSubscription?.cancel();
     _autoScanTimer?.cancel();
+    _periodicRestartTimer?.cancel();
     FlutterBackground.disableBackgroundExecution();
     super.dispose();
   }
@@ -431,14 +489,7 @@ class _BleScannerScreenState extends State<BleScannerScreen> with WidgetsBinding
           ),
           IconButton(
             icon: const Icon(Icons.settings),
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => const SettingsScreen(),
-                ),
-              );
-            },
+            onPressed: _showPinDialogAndNavigate,
             tooltip: 'Settings',
           ),
         ],
