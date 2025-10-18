@@ -163,3 +163,5 @@ The modular design makes it easy to add new features:
 - Add new export formats in `data_export_helper.dart`
 - Extend the database schema in `database_helper.dart`
 - Add new UI screens following the existing pattern
+
+-by leonardo littig
